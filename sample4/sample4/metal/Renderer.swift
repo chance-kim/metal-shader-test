@@ -24,12 +24,18 @@ class Renderer:NSObject {
     
     var imageVertexBuffer: MTLBuffer!
     var imagePipelineState: MTLRenderPipelineState!
+    
+    var renderTargetTexture: MTLTexture?
+    var renderPassDescriptor: MTLRenderPassDescriptor!
+    var renderPipelineState: MTLRenderPipelineState!
+    
     var imageTexture: MTLTexture?
     var maskingTexture: MTLTexture?
     var imageDepthState:MTLDepthStencilState!
     
     var imageVertexFunction: MTLFunction!
     var imageFragmentFunction: MTLFunction!
+    var renderTargetFragmentFunction: MTLFunction!
     
     
     override init() {
@@ -46,7 +52,8 @@ class Renderer:NSObject {
         }
         
         imageVertexFunction = defaultLibrary.makeFunction(name: "imageVertexFunction")
-        imageFragmentFunction = defaultLibrary.makeFunction(name: "imageFragmentFunction")
+        imageFragmentFunction = defaultLibrary.makeFunction(name: "swapFragmentFunction")
+        renderTargetFragmentFunction = defaultLibrary.makeFunction(name: "imageFragmentFunction")
         
         self.commandQueue = self.device.makeCommandQueue()
         
@@ -55,6 +62,62 @@ class Renderer:NSObject {
         imageVertexBuffer.label = "ImageVertexBuffer"
         
         
+        initRederTarget()
+        initSwapRender()
+        
+        self.imageTexture = loadTexture(name:"sample", ext:"png")
+    }
+    
+    func initRederTarget() {
+        let imageVertexDescriptor = MTLVertexDescriptor()
+        imageVertexDescriptor.attributes[0].format = .float2
+        imageVertexDescriptor.attributes[0].offset = 0
+        imageVertexDescriptor.attributes[0].bufferIndex = 0
+        imageVertexDescriptor.attributes[1].format = .float2
+        imageVertexDescriptor.attributes[1].offset = 8
+        imageVertexDescriptor.attributes[1].bufferIndex = 0
+        imageVertexDescriptor.layouts[0].stride = 16
+        imageVertexDescriptor.layouts[0].stepRate = 1
+        imageVertexDescriptor.layouts[0].stepFunction = .perVertex
+        
+        
+        let imagePipelineDescriptor = MTLRenderPipelineDescriptor()
+        imagePipelineDescriptor.label = "ImageRenderPipeline"
+        imagePipelineDescriptor.sampleCount = 1
+        imagePipelineDescriptor.vertexFunction = imageVertexFunction
+        imagePipelineDescriptor.fragmentFunction = renderTargetFragmentFunction
+        imagePipelineDescriptor.vertexDescriptor = imageVertexDescriptor
+        imagePipelineDescriptor.depthAttachmentPixelFormat = .invalid
+        imagePipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+
+        do {
+            try self.renderPipelineState = self.device.makeRenderPipelineState(descriptor: imagePipelineDescriptor)
+        } catch let error {
+            print("error=\(error.localizedDescription)")
+        }
+        
+        let texDescriptor = MTLTextureDescriptor()
+        texDescriptor.textureType = MTLTextureType.type2D
+        texDescriptor.width = 56
+        texDescriptor.height = 56
+        texDescriptor.pixelFormat = .bgra8Unorm
+        texDescriptor.storageMode = .shared
+        texDescriptor.usage = [.renderTarget, .shaderRead]
+        
+        self.renderTargetTexture = self.device.makeTexture(descriptor: texDescriptor)
+        
+        let clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        
+        self.renderPassDescriptor = MTLRenderPassDescriptor()
+        self.renderPassDescriptor.colorAttachments[0].texture = self.renderTargetTexture
+        self.renderPassDescriptor.colorAttachments[0].loadAction = .clear
+        self.renderPassDescriptor.colorAttachments[0].clearColor = clearColor
+        self.renderPassDescriptor.colorAttachments[0].storeAction = .store
+        
+    }
+    
+    
+    func initSwapRender() {
         let imageVertexDescriptor = MTLVertexDescriptor()
         imageVertexDescriptor.attributes[0].format = .float2
         imageVertexDescriptor.attributes[0].offset = 0
@@ -81,17 +144,12 @@ class Renderer:NSObject {
         } catch let error {
             print("error=\(error.localizedDescription)")
         }
-
+        
         // depth state
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .lessEqual
         depthDescriptor.isDepthWriteEnabled = true
         self.imageDepthState = self.device.makeDepthStencilState(descriptor: depthDescriptor)
-        
-        
-        
-        self.imageTexture = loadTexture(name:"sample", ext:"png")
-        self.maskingTexture = loadTexture(name: "masking", ext: "png")
     }
     
     func loadTexture(name:String, ext:String) -> MTLTexture? {
@@ -113,22 +171,33 @@ class Renderer:NSObject {
         guard let commandBuffer = self.commandQueue.makeCommandBuffer() else { return }
         commandBuffer.label = "RenderCommand"
         
-        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
+        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: self.renderPassDescriptor) else {
             return
         }
         
+        
         renderEncoder.label = "RenderEncoder"
         renderEncoder.setCullMode(.front)
-        renderEncoder.setRenderPipelineState(self.imagePipelineState)
-        renderEncoder.setDepthStencilState(self.imageDepthState)
-        
+        renderEncoder.setRenderPipelineState(self.renderPipelineState)
         renderEncoder.setVertexBuffer(self.imageVertexBuffer, offset: 0, index: 0)
-        
         renderEncoder.setFragmentTexture(self.imageTexture!, index: 0)
-        renderEncoder.setFragmentTexture(self.maskingTexture!, index: 1)
-        
         renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         renderEncoder.endEncoding()
+        
+        
+        guard let swapEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
+            return
+        }
+        swapEncoder.label = "SwapEncoder"
+        swapEncoder.setCullMode(.front)
+        swapEncoder.setRenderPipelineState(self.imagePipelineState)
+        swapEncoder.setDepthStencilState(self.imageDepthState)
+        swapEncoder.setVertexBuffer(self.imageVertexBuffer, offset: 0, index: 0)
+        swapEncoder.setFragmentTexture(self.renderTargetTexture, index: 0)
+        swapEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        swapEncoder.endEncoding()
+        
+        
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }

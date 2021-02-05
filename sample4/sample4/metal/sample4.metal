@@ -32,13 +32,17 @@ vertex ImageOut imageVertexFunction( ImageVertex in [[stage_in]]) {
     return out;
 }
 
-fragment float4 imageFragmentFunction(ImageOut in [[stage_in]], texture2d<float> texture1 [[texture(0)]],
-                                      texture2d<float> texture2 [[texture(1)]]) {
+fragment float4 imageFragmentFunction(ImageOut in [[stage_in]], texture2d<float> texture1 [[texture(0)]]) {
     
     constexpr sampler colorSampler;
     float4 color = texture1.sample(colorSampler, in.texCoord);
-    float4 masking = texture2.sample(colorSampler, in.texCoord);
-    color = float4(color.rgb * (1 - masking.r), 1.0);
     return color;
 }
 
+
+fragment float4 swapFragmentFunction(ImageOut in [[stage_in]], texture2d<float> texture1 [[texture(0)]]) {
+    
+    constexpr sampler colorSampler;
+    float4 color = texture1.sample(colorSampler, in.texCoord);
+    return color;
+}
