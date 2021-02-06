@@ -34,8 +34,8 @@ class Renderer:NSObject {
     var imageDepthState:MTLDepthStencilState!
     
     var imageVertexFunction: MTLFunction!
-    var imageFragmentFunction: MTLFunction!
-    var renderTargetFragmentFunction: MTLFunction!
+    var renderScreenFragmentFunction: MTLFunction!
+    var renderTextureFragmentFunction: MTLFunction!
     
     
     override init() {
@@ -52,8 +52,8 @@ class Renderer:NSObject {
         }
         
         imageVertexFunction = defaultLibrary.makeFunction(name: "imageVertexFunction")
-        imageFragmentFunction = defaultLibrary.makeFunction(name: "swapFragmentFunction")
-        renderTargetFragmentFunction = defaultLibrary.makeFunction(name: "imageFragmentFunction")
+        renderScreenFragmentFunction = defaultLibrary.makeFunction(name: "swapFragmentFunction")
+        renderTextureFragmentFunction = defaultLibrary.makeFunction(name: "imageFragmentFunction")
         
         self.commandQueue = self.device.makeCommandQueue()
         
@@ -86,7 +86,7 @@ class Renderer:NSObject {
         imagePipelineDescriptor.label = "ImageRenderPipeline"
         imagePipelineDescriptor.sampleCount = 1
         imagePipelineDescriptor.vertexFunction = imageVertexFunction
-        imagePipelineDescriptor.fragmentFunction = renderTargetFragmentFunction
+        imagePipelineDescriptor.fragmentFunction = renderTextureFragmentFunction
         imagePipelineDescriptor.vertexDescriptor = imageVertexDescriptor
         imagePipelineDescriptor.depthAttachmentPixelFormat = .invalid
         imagePipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
@@ -135,7 +135,7 @@ class Renderer:NSObject {
         imagePipelineDescriptor.label = "ImageRenderPipeline"
         imagePipelineDescriptor.sampleCount = 1
         imagePipelineDescriptor.vertexFunction = imageVertexFunction
-        imagePipelineDescriptor.fragmentFunction = imageFragmentFunction
+        imagePipelineDescriptor.fragmentFunction = renderScreenFragmentFunction
         imagePipelineDescriptor.vertexDescriptor = imageVertexDescriptor
         imagePipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
         imagePipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
@@ -171,43 +171,38 @@ class Renderer:NSObject {
         guard let drawable = view.currentDrawable else { return }
         guard let commandBuffer = self.commandQueue.makeCommandBuffer() else { return }
         commandBuffer.label = "RenderCommand"
-        commandBuffer.addCompletedHandler{
-            _ in
-            let endTime = Int64((Date().timeIntervalSince1970 * 1000.0).rounded())
-            print("complete: \(endTime - startTime)ms)")
+        
+        if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: self.renderPassDescriptor)  {
+            encoder.label = "RenderEncoder"
+            encoder.setCullMode(.front)
+            encoder.setRenderPipelineState(self.renderPipelineState)
+            encoder.setVertexBuffer(self.imageVertexBuffer, offset: 0, index: 0)
+            encoder.setFragmentTexture(self.imageTexture!, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            encoder.endEncoding()
         }
-        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: self.renderPassDescriptor) else {
-            return
+        
+        
+        if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) {
+            encoder.label = "SwapEncoder"
+            encoder.setCullMode(.front)
+            encoder.setRenderPipelineState(self.imagePipelineState)
+            encoder.setDepthStencilState(self.imageDepthState)
+            encoder.setVertexBuffer(self.imageVertexBuffer, offset: 0, index: 0)
+            encoder.setFragmentTexture(self.renderTargetTexture, index: 0)
+            encoder.setFragmentTexture(self.imageTexture, index: 1)
+            encoder.setFragmentTexture(self.maskingTexture, index: 2)
+            
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            encoder.endEncoding()
         }
-        
-        
-        renderEncoder.label = "RenderEncoder"
-        renderEncoder.setCullMode(.front)
-        renderEncoder.setRenderPipelineState(self.renderPipelineState)
-        renderEncoder.setVertexBuffer(self.imageVertexBuffer, offset: 0, index: 0)
-        renderEncoder.setFragmentTexture(self.imageTexture!, index: 0)
-        renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-        renderEncoder.endEncoding()
-        
-        
-        guard let swapEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
-            return
-        }
-        swapEncoder.label = "SwapEncoder"
-        swapEncoder.setCullMode(.front)
-        swapEncoder.setRenderPipelineState(self.imagePipelineState)
-        swapEncoder.setDepthStencilState(self.imageDepthState)
-        swapEncoder.setVertexBuffer(self.imageVertexBuffer, offset: 0, index: 0)
-        swapEncoder.setFragmentTexture(self.renderTargetTexture, index: 0)
-        swapEncoder.setFragmentTexture(self.imageTexture, index: 1)
-        swapEncoder.setFragmentTexture(self.maskingTexture, index: 2)
-        
-        swapEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-        swapEncoder.endEncoding()
         
         
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        let endTime = Int64((Date().timeIntervalSince1970 * 1000.0).rounded())
+        print("complete: \(endTime - startTime)ms)")
     }
 }
 
